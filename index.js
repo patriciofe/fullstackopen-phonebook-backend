@@ -1,9 +1,12 @@
+require('dotenv').config()
 const express = require('express')
 const morgan = require('morgan')
+const Person = require('./models/person')
+const person = require('./models/person')
 
 const app = express()
-app.use(express.json())
 app.use(express.static('dist'))
+app.use(express.json())
 
 morgan.token('body', (req, res) => JSON.stringify(req.body))
 
@@ -48,53 +51,89 @@ app.get('/info', (req, res) => {
 })
 
 app.get('/api/persons', (req, res) => {
-  res.send(persons)
+  Person.find({}).then(result => {
+    res.json(result)
+  })
 })
 
-app.get('/api/persons/:id', (req, res) => {
-  const requestId = req.params.id
-
-  const person = persons.find(person => person.id === requestId)
-  console.log(person)
-
-  if (person) res.send(person)
-  else res.status(404).end()
+app.get('/api/persons/:id', (req, res, next) => {
+  Person.findById(req.params.id)
+    .then(person => {
+      if (person) res.json(person)
+      else res.status(404).end()
+    })
+    .catch(error => next(error))
 })
 
-app.delete('/api/persons/:id', (req, res) => {
-  const requestId = req.params.id
-
-  persons = persons.filter(p => p.id !== requestId)
-  res.status(204).end()
+app.delete('/api/persons/:id', (req, res, next) => {
+  Person.findByIdAndDelete(req.params.id)
+    .then(result => {
+      res.status(204).end()
+    })
+    .catch(error => next(error))
 })
 
-app.post('/api/persons', (req, res) => {
-  const newId = Math.floor(Math.random() * 1000000)
+app.post('/api/persons', (req, res, next) => {
   const body = req.body
-
-  const existingNames = persons.map(p => p.name)
 
   if (!body.name || !body.number)
     return res.status(400).json({
       error: 'name or number missing'
     })
   
-  if (existingNames.includes(body.name))
-    return res.status(400).json({
-      error: 'name already exists'
-    })
-  
-  const person = {
-    id: String(newId),
+  const person = new Person({
     name: body.name,
     number: body.number
-  }
-
-  persons = persons.concat(person)
-
-  res.json(person)
-
+  })
+  
+  person.save()
+    .then(savedPerson => {
+      res.json(savedPerson)
+    })
+    .catch(error => next(error))
 })
+
+app.put('/api/persons/:id', (req, res, next) => {
+  const { name, number } = req.body
+  
+  Person.findById(req.params.id)
+    .then(person => {
+      if (!person) return res.status(404).end()
+      
+      person.name = name
+      person.number = number
+
+      return person.save().then((updatedPerson) => {
+        res.json(updatedPerson)
+      })
+    })
+    .catch(error => next(error))
+})
+
+const errorHandler = (error, request, response, next) => {
+  let errorMessage
+  const thisError = (error.errors['name']
+    || error.errors['number']).properties
+
+  if (error.name === 'CastError') {
+    return response.status(400).send({ error: 'malformatted id'})
+  } else if (error.name === 'ValidationError') {
+    switch (thisError.type) {
+      case 'minlength': 
+        errorMessage = `${thisError.path} must be at least ${thisError.minlength} characters long.`
+        break
+      case 'user defined': {
+        errorMessage = `${thisError.path} has an invalid format (Must be ###-###-####)`
+        break
+      }
+    }
+    return response.status(400).send({ error: errorMessage })
+  }
+  
+  next(error)
+}
+
+app.use(errorHandler)
 
 const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
